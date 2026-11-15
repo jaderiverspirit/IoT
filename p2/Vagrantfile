@@ -1,0 +1,30 @@
+# frozen_string_literal: true
+BOX_ROOT = 'https://dl.rockylinux.org/pub/rocky/10/images/x86_64/'
+BOX_URLS = {
+  'virtualbox' => BOX_ROOT + 'Rocky-10-Vagrant-Vbox.latest.x86_64.vagrant.virtualbox.box',
+  'libvirt'    => BOX_ROOT + 'Rocky-10-Vagrant-Libvirt.latest.x86_64.vagrant.libvirt.box'
+}.freeze
+provider = ENV.fetch('IOT_VAGRANT_PROVIDER', 'virtualbox')
+raise "Unsupported provider: #{provider}" unless BOX_URLS.key?(provider)
+
+Vagrant.configure('2') do |config|
+  config.vm.box = "IoT-RockyLinux10-#{provider}"
+  config.vm.box_url = BOX_URLS.fetch(provider)
+  config.vm.box_check_update = false
+  config.vm.synced_folder '.', '/vagrant', type: 'rsync' if provider == 'libvirt'
+
+  config.vm.define 'IoTS' do |server|
+    server.vm.hostname = 'IoTS'
+    server.vm.network 'private_network', ip: '192.168.56.110'
+    server.vm.provider 'virtualbox' do |vb|
+      vb.name = 'IoTS-P2'
+      vb.cpus = 2
+      vb.memory = 2048
+    end
+    server.vm.provider 'libvirt' do |lv|
+      lv.cpus = 2
+      lv.memory = 2048
+    end
+    server.vm.provision 'shell', path: 'scripts/IoT-install.sh'
+  end
+end

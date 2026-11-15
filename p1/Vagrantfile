@@ -1,0 +1,53 @@
+# frozen_string_literal: true
+# Official Rocky Linux 10 direct vendor-hosted box files, not HCP Vagrant Cloud.
+require 'securerandom'
+
+BOX_ROOT = 'https://dl.rockylinux.org/pub/rocky/10/images/x86_64/'
+BOX_URLS = {
+  'virtualbox' => BOX_ROOT + 'Rocky-10-Vagrant-Vbox.latest.x86_64.vagrant.virtualbox.box',
+  'libvirt'    => BOX_ROOT + 'Rocky-10-Vagrant-Libvirt.latest.x86_64.vagrant.libvirt.box'
+}.freeze
+
+# Pick the matching official image for the chosen provider. Override via:
+#   IOT_VAGRANT_PROVIDER=libvirt vagrant up --provider=libvirt
+provider = ENV.fetch('IOT_VAGRANT_PROVIDER', 'virtualbox')
+raise "Unsupported provider: #{provider}" unless BOX_URLS.key?(provider)
+
+# Generated *on the Linux VM hosting Vagrant*, before either guest starts.
+# Both server and worker receive it in Vagrant's synchronized /vagrant folder.
+token_file = File.expand_path('.iot-join-token', __dir__)
+unless File.exist?(token_file)
+  File.write(token_file, SecureRandom.hex(48) + "\n")
+end
+File.chmod(0o600, token_file)
+
+Vagrant.configure('2') do |config|
+  config.vm.box = "IoT-RockyLinux10-#{provider}"
+  config.vm.box_url = BOX_URLS.fetch(provider)
+  config.vm.box_check_update = false # vendor URL 'latest' is mutable, not a catalog
+  config.vm.synced_folder '.', '/vagrant', type: 'rsync' if provider == 'libvirt'
+
+  # Provider-specific limits (required by the exercise for Part 1).
+  { 'IoTS' => ['192.168.56.110', 'IoT-server.sh'],
+    'IoTSW' => ['192.168.56.111', 'IoT-worker.sh'] }.each do |machine_name, (ip, script)|
+    config.vm.define machine_name do |node|
+      # K3s's current published server minimum is 2 CPU / 2 GiB RAM.
+      # The subject's 1 CPU / 1 GiB advice is explicitly not mandatory.
+      tiny = ENV['IOT_P1_TINY'] == '1'
+      cpus = (machine_name == 'IoTS' && !tiny) ? 2 : 1
+      memory = (machine_name == 'IoTS' && !tiny) ? 2048 : 1024
+      node.vm.hostname = machine_name
+      node.vm.network 'private_network', ip: ip
+      node.vm.provider 'virtualbox' do |vb|
+        vb.name = machine_name
+        vb.cpus = cpus
+        vb.memory = memory
+      end
+      node.vm.provider 'libvirt' do |lv|
+        lv.cpus = cpus
+        lv.memory = memory
+      end
+      node.vm.provision 'shell', path: "scripts/#{script}"
+    end
+  end
+end

@@ -1,0 +1,14 @@
+# Created locally during Vagrant provisioning (NEVER commit cluster tokens).
+**/.vagrant/
+**/.iot-join-token
+**/.DS_Store
+*.log
+*.swp
+.env
+.env.*
+!*.env.example
+
+# Credentials, worktrees, and generated Kubernetes manifests.
+*.kubeconfig
+**/IoT-rendered-*.yaml
+**/.IoT-*/

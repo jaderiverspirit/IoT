@@ -1,0 +1,113 @@
+# Local GitLab CE, official Docker image, running INSIDE the K3d cluster.
+# Small teaching lab only; use the vendor's HA Helm chart for production.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: iot-gitlab-storage
+  namespace: gitlab
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 25Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: iot-gitlab
+  namespace: gitlab
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: iot-gitlab
+  template:
+    metadata:
+      labels:
+        app: iot-gitlab
+    spec:
+      terminationGracePeriodSeconds: 120
+      containers:
+        - name: gitlab
+          # 'latest' matches the subject's requirement to install current GitLab.
+          # A persistent instance must use GitLab's documented upgrade path.
+          image: gitlab/gitlab-ce:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8081
+          env:
+            - name: IOT_GITLAB_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: iot-gitlab-bootstrap
+                  key: root-password
+            - name: GITLAB_OMNIBUS_CONFIG
+              value: |
+                external_url 'http://gitlab.gitlab.svc.cluster.local:8081'
+                letsencrypt['enable'] = false
+                nginx['listen_https'] = false
+                nginx['listen_port'] = 8081
+                gitlab_rails['initial_root_password'] = ENV.fetch('IOT_GITLAB_ROOT_PASSWORD')
+                prometheus_monitoring['enable'] = false
+                gitlab_exporter['enable'] = false
+                node_exporter['enable'] = false
+                grafana['enable'] = false
+          resources:
+            requests:
+              memory: 3Gi
+              cpu: 500m
+            limits:
+              memory: 7Gi
+              cpu: '4'
+          volumeMounts:
+            - name: persistent
+              mountPath: /etc/gitlab
+              subPath: config
+            - name: persistent
+              mountPath: /var/log/gitlab
+              subPath: logs
+            - name: persistent
+              mountPath: /var/opt/gitlab
+              subPath: data
+            - name: shm
+              mountPath: /dev/shm
+          # GitLab Omnibus initial configuration can take many minutes.
+          startupProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 15
+            failureThreshold: 100
+          readinessProbe:
+            httpGet:
+              path: /users/sign_in
+              port: http
+            periodSeconds: 20
+            failureThreshold: 12
+            timeoutSeconds: 10
+      volumes:
+        - name: persistent
+          persistentVolumeClaim:
+            claimName: iot-gitlab-storage
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gitlab
+  namespace: gitlab
+spec:
+  type: ClusterIP
+  selector:
+    app: iot-gitlab
+  ports:
+    - name: http
+      port: 8081
+      targetPort: http
