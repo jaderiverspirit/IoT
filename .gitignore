@@ -12,3 +12,9 @@
 *.kubeconfig
 **/IoT-rendered-*.yaml
 **/.IoT-*/
+
+# Locally built Debian Vagrant images
+boxes/*.box
+
+# Locally built Vagrant boxes
+/boxes/*.box
