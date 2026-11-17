@@ -39,10 +39,10 @@ sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plug
 sudo systemctl enable --now docker
 sudo usermod -aG docker "$(id -un)"
 
-# K3d official installer fetches the current stable release by default.
+# Install the tested K3d v5.9.0 release.
 curl --fail --silent --show-error --location \
   https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh -o /tmp/iot-k3d-install.sh
-sudo bash /tmp/iot-k3d-install.sh
+sudo env TAG=v5.9.0 bash /tmp/iot-k3d-install.sh
 
 # Install the latest kubectl patch release for Kubernetes 1.35.
 arch="$(dpkg --print-architecture)"
