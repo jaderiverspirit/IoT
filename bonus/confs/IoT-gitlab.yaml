@@ -56,7 +56,6 @@ spec:
                 prometheus_monitoring['enable'] = false
                 gitlab_exporter['enable'] = false
                 node_exporter['enable'] = false
-                grafana['enable'] = false
           resources:
             requests:
               memory: 3Gi
