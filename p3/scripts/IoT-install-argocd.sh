@@ -6,7 +6,7 @@ kubectl config current-context | grep -qx 'k3d-iot' || {
 kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
 # Large CRD metadata requires server-side apply.
 kubectl apply -n argocd --server-side --force-conflicts \
-  -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+  -f https://raw.githubusercontent.com/argoproj/argo-cd/v3.6.1/manifests/install.yaml
 kubectl -n argocd rollout status deployment/argocd-repo-server --timeout=600s
 kubectl -n argocd rollout status deployment/argocd-server --timeout=600s
 kubectl -n argocd rollout status statefulset/argocd-application-controller --timeout=600s
