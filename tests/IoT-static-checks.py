@@ -37,9 +37,21 @@ assert len(by_kind['Ingress']) == 1
 replicas = {x['metadata']['name']: x['spec']['replicas'] for x in by_kind['Deployment']}
 assert replicas == {'iot-app1': 1, 'iot-app2': 3, 'iot-app3': 1}, replicas
 spec = by_kind['Ingress'][0]['spec']
-assert spec['defaultBackend']['service']['name'] == 'iot-app3'
-hosts = {x['host']: x['http']['paths'][0]['backend']['service']['name'] for x in spec['rules']}
+rules = spec['rules']
+
+# Validate hostname-specific routing.
+hosts = {
+    rule['host']: rule['http']['paths'][0]['backend']['service']['name']
+    for rule in rules if 'host' in rule
+}
 assert hosts == {'app1.com': 'iot-app1', 'app2.com': 'iot-app2'}
+
+# Validate catch-all fallback routing to App3.
+fallback = [rule for rule in rules if 'host' not in rule]
+assert len(fallback) == 1
+assert fallback[0]['http']['paths'][0]['backend']['service']['name'] == 'iot-app3'
+assert fallback[0]['http']['paths'][0]['path'] == '/'
+assert fallback[0]['http']['paths'][0]['pathType'] == 'Prefix'
 
 p3 = yaml.safe_load((R/'p3/confs/apps/IoT-deployment.yaml').read_text())
 assert p3['metadata']['namespace'] == 'dev'
