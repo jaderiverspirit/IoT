@@ -7,7 +7,7 @@ spec:
   project: default
   source:
     repoURL: __IOT_GITHUB_URL__
-    targetRevision: main
+    targetRevision: feature/debian13
     path: p3/confs/apps
   destination:
     server: https://kubernetes.default.svc
