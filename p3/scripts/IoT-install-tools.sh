@@ -24,8 +24,16 @@ fi
 sudo chmod a+r /etc/apt/keyrings/docker.asc
 arch="$(dpkg --print-architecture)"
 codename="${UBUNTU_CODENAME:-${VERSION_CODENAME}}"
-printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/%s %s stable\n' \
-  "$arch" "$ID" "$codename" | sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
+sudo rm -f /etc/apt/sources.list.d/docker.list
+
+sudo tee /etc/apt/sources.list.d/docker.sources >/dev/null <<EOF
+Types: deb
+URIs: https://download.docker.com/linux/${ID}
+Suites: ${codename}
+Components: stable
+Architectures: ${arch}
+Signed-By: /etc/apt/keyrings/docker.asc
+EOF
 sudo apt-get update
 sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 sudo systemctl enable --now docker
@@ -36,10 +44,10 @@ curl --fail --silent --show-error --location \
   https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh -o /tmp/iot-k3d-install.sh
 sudo bash /tmp/iot-k3d-install.sh
 
-# Install latest stable kubectl from Kubernetes' stable.txt channel.
+# Install the latest kubectl patch release for Kubernetes 1.35.
 arch="$(dpkg --print-architecture)"
 case "$arch" in amd64|arm64) ;; *) echo "Unsupported arch: $arch" >&2; exit 1 ;; esac
-version="$(curl --fail --silent --show-error -L https://dl.k8s.io/release/stable.txt)"
+version="$(curl --fail --silent --show-error -L https://dl.k8s.io/release/stable-1.35.txt)"
 curl --fail --silent --show-error -L \
   "https://dl.k8s.io/release/${version}/bin/linux/${arch}/kubectl" -o /tmp/iot-kubectl
 sudo install -m 0755 /tmp/iot-kubectl /usr/local/bin/kubectl
