@@ -202,12 +202,8 @@ metadata:
   name: iot-routing
 spec:
   ingressClassName: traefik
-  defaultBackend:
-    service:
-      name: iot-app3
-      port:
-        number: 80
   rules:
+    # Route app1.com to App1.
     - host: app1.com
       http:
         paths:
@@ -218,6 +214,8 @@ spec:
                 name: iot-app1
                 port:
                   number: 80
+
+    # Route app2.com to App2.
     - host: app2.com
       http:
         paths:
@@ -226,5 +224,17 @@ spec:
             backend:
               service:
                 name: iot-app2
+                port:
+                  number: 80
+
+    # No host specified: match requests for any hostname.
+    # This is the fallback route to App3.
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: iot-app3
                 port:
                   number: 80
