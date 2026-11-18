@@ -50,7 +50,7 @@ K3S_TOKEN="$(tr -d '\r\n' < /vagrant/.iot-join-token)"
 
 export K3S_URL='https://192.168.56.110:6443'
 export INSTALL_K3S_CHANNEL=stable
-export INSTALL_K3S_EXEC='agent --node-name=iotsw --node-ip=192.168.56.111'
+export INSTALL_K3S_EXEC='agent --node-name=hlehmannsw --node-ip=192.168.56.111'
 
 curl --fail --silent --show-error --location \
   https://get.k3s.io -o /tmp/iot-install-k3s.sh

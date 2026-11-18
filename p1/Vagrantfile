@@ -1,5 +1,4 @@
 # frozen_string_literal: true
-# Official Rocky Linux 10 direct vendor-hosted box files, not HCP Vagrant Cloud.
 require 'securerandom'
 
 # Debian 13 (Trixie) — locally built VirtualBox base box.
@@ -7,8 +6,6 @@ BOX_FILE = File.expand_path(
   '../boxes/IoT-Debian13-virtualbox.box', __dir__
 )
 
-# Pick the matching official image for the chosen provider. Override via:
-#   IOT_VAGRANT_PROVIDER=libvirt vagrant up --provider=libvirt
 provider = ENV.fetch('IOT_VAGRANT_PROVIDER', 'virtualbox')
 raise "Unsupported provider: #{provider}" unless provider == 'virtualbox'
 
@@ -22,29 +19,25 @@ File.chmod(0o600, token_file)
 
 Vagrant.configure('2') do |config|
   config.vm.box = 'IoT-Debian13-virtualbox'
-  config.vm.box_url = "file://#{BOX_FILE}"
+  config.vm.box_url = "file://#{BOX_FILE}" if File.file?(BOX_FILE)
   config.vm.box_check_update = false # vendor URL 'latest' is mutable, not a catalog
   config.vm.synced_folder '.', '/vagrant', type: 'rsync'
 
   # Provider-specific limits (required by the exercise for Part 1).
-  { 'IoTS' => ['192.168.56.110', 'IoT-server.sh'],
-    'IoTSW' => ['192.168.56.111', 'IoT-worker.sh'] }.each do |machine_name, (ip, script)|
+  { 'hlehmannS' => ['192.168.56.110', 'IoT-server.sh'],
+    'hlehmannSW' => ['192.168.56.111', 'IoT-worker.sh'] }.each do |machine_name, (ip, script)|
     config.vm.define machine_name do |node|
       # K3s's current published server minimum is 2 CPU / 2 GiB RAM.
       # The subject's 1 CPU / 1 GiB advice is explicitly not mandatory.
       tiny = ENV['IOT_P1_TINY'] == '1'
-      cpus = (machine_name == 'IoTS' && !tiny) ? 2 : 1
-      memory = (machine_name == 'IoTS' && !tiny) ? 2048 : 1024
+      cpus = (machine_name == 'hlehmannS' && !tiny) ? 2 : 1
+      memory = (machine_name == 'hlehmannS' && !tiny) ? 2048 : 1024
       node.vm.hostname = machine_name
       node.vm.network 'private_network', ip: ip
       node.vm.provider 'virtualbox' do |vb|
         vb.name = machine_name
         vb.cpus = cpus
         vb.memory = memory
-      end
-      node.vm.provider 'libvirt' do |lv|
-        lv.cpus = cpus
-        lv.memory = memory
       end
       node.vm.provision 'shell', path: "scripts/#{script}"
     end

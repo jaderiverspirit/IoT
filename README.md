@@ -1,284 +1,396 @@
-# IoT (subject v4.1)
+# Inception-of-Things — IoT-hlehmann
 
-A four-part, Linux-first implementation of the 42 **Inception-of-Things** subject, including the GitLab bonus. All project configuration is kept in `p1/`, `p2/`, `p3/` and `bonus/`, with executable provisioning scripts in each `scripts/` directory and Kubernetes manifests in `confs/`.
+Implementation of the **42 Inception-of-Things (IoT), subject v4.1** project. It introduces Kubernetes through K3s, Vagrant, K3d and Argo CD, then extends the GitOps setup with a locally hosted GitLab instance.
 
-> **Important:** Verify in a Linux virtual machine before submission.
+**Team login:** `hlehmann`
+**Public GitHub repository:** https://github.com/jaderiverspirit/IoT-hlehmann
 
-## 0. Requirements and environment
+## 1. Architecture
 
-The entire exercise **must be performed in a VM**, per subject page 4. On a physical Linux workstation, start a Linux *outer VM* with nested virtualization available. Run Vagrant for Parts 1 and 2 **inside that VM**. For Part 3, use a Linux VM with Docker and K3d (without Vagrant); this can be the outer VM itself. To reduce nested virtualization complexity you may use a native Linux host with KVM/libvirt as the **provider** *inside an outer VM with nested KVM*, but running the project only on the physical host is not compliant with the subject.
+| Part | Infrastructure | Kubernetes | Purpose |
+| --- | --- | --- | --- |
+| **P1** | Two Debian 13 VMs created by Vagrant/VirtualBox | K3s server and agent | Cluster provisioning, networking and passwordless SSH |
+| **P2** | One Debian 13 VM created by Vagrant/VirtualBox | K3s with Traefik | Three web applications, Services and host-based Ingress |
+| **P3** | Debian 13 VirtualBox VM (`hlehmann-P3-Bonus`), without Vagrant | K3d cluster `iot` with Argo CD | Continuous deployment from public GitHub |
+| **Bonus** | **Same VM and same K3d cluster as P3** | Existing Argo CD plus local GitLab | Continuous deployment from a local GitLab repository |
 
-**Suggested lab allocations** (subject P1 sizes are deliberate):
+The project runs its workloads inside Linux virtual machines. Linux Mint is the workstation operating system and VirtualBox host. P3 and Bonus share **one** K3d cluster, one Argo CD installation and the same deployment in the `dev` namespace; the Bonus changes the Git source of truth rather than creating a second cluster.
 
-| Layer | Minimum for practical testing | Notes |
-|---|---|---|
-| Outer Linux VM | 4–6 vCPU, 16 GiB RAM, 80 GiB free, nested virtualization | Run Vagrant and K3d here. 12 GiB RAM may work with fewer parallel guests. |
-| P1 IoTS | 2 vCPU, 2048 MiB RAM (default) | Rocky Linux 10 K3s server; override to 1 CPU / 1024 MiB with `IOT_P1_TINY=1` only if needed |
-| P1 IoTSW | 1 vCPU, 1024 MiB RAM | Rocky Linux 10 K3s agent |
-| P2 IoTS | 2 vCPU, 2048 MiB RAM | K3s server, Traefik and 5 nginx pods |
-| P3 and bonus | preferably 4+ vCPU, 10–12+ GiB free RAM, 40+ GiB storage | Docker, K3d, Argo CD, full GitLab CE omnibus image |
+```text
+Linux Mint workstation (VirtualBox + Vagrant)
+├── P1: hlehmannS  (192.168.56.110) ── K3s server
+│       hlehmannSW (192.168.56.111) ── K3s agent
+├── P2: hlehmannS  (192.168.56.110) ── K3s + Traefik + app1/app2/app3
+└── P3 + Bonus: hlehmann-P3-Bonus (Debian 13 VM)
+    └── Docker → K3d cluster: iot
+        ├── namespace argocd ── Argo CD
+        ├── namespace dev    ── wil42/playground
+        └── namespace gitlab ── GitLab CE (Bonus)
+```
 
-**Linux host prerequisites for Parts 1 and 2:** `vagrant`, `curl`, `git`, and either `VirtualBox` (default) or `libvirt` plus `vagrant-libvirt` (often more reliable on Linux). For libvirt use `IOT_VAGRANT_PROVIDER=libvirt` consistently; Vagrant is explicitly directed to the image's **vendor-hosted** URL. The official Rocky Linux 10 images are published at `https://dl.rockylinux.org/pub/rocky/10/images/x86_64/` (x86_64 only). On an Ubuntu outer VM use `vagrant plugin install vagrant-libvirt` or your distribution's `vagrant-libvirt` package, and make sure your login is authorized for libvirt.
+P1 and P2 are separate Vagrant environments but deliberately reuse the VirtualBox name `hlehmannS` and private IP `192.168.56.110`. **Destroy the P1 VMs before creating P2.** Merely halting a VM does not release its registered VirtualBox name.
 
-Parts 1 and 2 reuse `IoTS` as a logical Vagrant machine name in *different Vagrant environments*. **Stop/destroy one part before starting the other** to avoid IP collisions at `192.168.56.110`.
+### Repository structure
 
-### Names, interfaces and network
+```text
+.
+├── p1/
+│   ├── Vagrantfile
+│   ├── scripts/
+│   └── confs/
+├── p2/
+│   ├── Vagrantfile
+│   ├── scripts/
+│   └── confs/
+├── p3/
+│   ├── scripts/
+│   └── confs/
+│       └── apps/
+├── bonus/
+│   ├── scripts/
+│   └── confs/
+├── boxes/                  # optional local Debian Vagrant box; *.box is ignored
+├── tests/
+└── README.md
+```
 
-- `IoTS`: `192.168.56.110` on a Vagrant private interface; K3s controller (P1) or single node (P2).
-- `IoTSW`: `192.168.56.111` on its Vagrant private interface; K3s agent (P1).
-- VM names/hostnames use the requested `IoT` prefix; Kubernetes resource names are lowercase, as Kubernetes requires DNS-compatible names.
-- `app1.com` -> app1 (1 replica); `app2.com` -> app2 (3 replicas); *any other Host* -> app3 (1 replica).
-- K3d cluster: `iot`; namespaces: `argocd`, `dev` (and bonus `gitlab`).
-- Part 3 GitOps example uses the subject's official sample `wil42/playground:v1` and `wil42/playground:v2`, both exposed on TCP 8888 through a ClusterIP and `kubectl port-forward`.
+## 2. Requirements and setup
 
-## 1. Part 1 — Vagrant, K3s controller and worker
+### Linux Mint workstation (P1/P2)
 
-From the project root **inside the Linux outer VM**:
+- VirtualBox and Vagrant, with hardware virtualization enabled.
+- Git, SSH, `curl` and `rsync`.
+- A self-built **Debian 13 (Trixie)** VirtualBox Vagrant box installed under the name `IoT-Debian13-virtualbox`.
+- Ruby for checking Vagrantfile syntax; Python 3 with PyYAML for the optional static checks.
+
+Check the local box:
+
+```bash
+vagrant box list
+# Expected entry: IoT-Debian13-virtualbox (virtualbox, ...)
+```
+
+Both `p1/Vagrantfile` and `p2/Vagrantfile` use this box name. They optionally refer to `boxes/IoT-Debian13-virtualbox.box` if that archive is present. The `.box` archive is excluded from Git because it is several gigabytes in size; **a fresh clone on another machine requires the self-built box to be imported or rebuilt first**.
+
+To import an existing archive, if necessary:
+
+```bash
+vagrant box add --name IoT-Debian13-virtualbox /path/to/IoT-Debian13-virtualbox.box
+```
+
+The box is built from Debian's official installation media, not from a third-party public box registry. The source files and instructions for the project are in Git; the Vagrant base-image archive is supplied separately.
+
+### Combined P3 + Bonus VM
+
+| Setting | Configuration |
+| --- | --- |
+| VirtualBox name | `hlehmann-P3-Bonus` |
+| Guest operating system | Debian 13 |
+| CPUs | 4 vCPU |
+| Memory | 10 GiB |
+| Virtual disk | 60 GiB |
+| Container runtime | Docker Engine |
+| Kubernetes | K3d (`iot`) |
+| Namespaces | `argocd`, `dev`, `gitlab` (Bonus) |
+
+Use a regular Debian user with `sudo` privileges. Clone the repository **inside this VM**, and run the P3/Bonus scripts there. Docker needs sufficient disk capacity for images, GitLab's persistent data and logs.
+
+```bash
+git clone https://github.com/jaderiverspirit/IoT-hlehmann.git
+cd IoT-hlehmann
+```
+
+## 3. Part 1 — K3s server and worker with Vagrant
+
+P1 provisions two Debian 13 virtual machines. VirtualBox VM names and guest hostnames follow the 42 login convention, while Kubernetes node names are lowercase to meet Kubernetes naming rules.
+
+| Role | VM / guest hostname | K3s node name | Private IP | CPUs | RAM |
+| --- | --- | --- | --- | ---: | ---: |
+| Server | `hlehmannS` | `hlehmanns` | `192.168.56.110` | 2 | 2048 MiB |
+| Worker | `hlehmannSW` | `hlehmannsw` | `192.168.56.111` | 1 | 1024 MiB |
+
+From the project root on the Linux workstation:
 
 ```bash
 cd p1
+vagrant validate
 vagrant up --provider=virtualbox
-# On a libvirt-capable Linux VM instead:
-# IOT_VAGRANT_PROVIDER=libvirt vagrant up --provider=libvirt
 vagrant status
-vagrant ssh IoTS
-# in the IoTS guest:
-#   sudo kubectl get nodes -o wide
-#   ip -brief address
-#   exit
-vagrant ssh IoTSW
-# in the IoTSW guest:
-#   sudo systemctl status k3s-agent --no-pager
-#   exit
+
+# Server: both Kubernetes nodes should be Ready.
+vagrant ssh hlehmannS -c 'sudo /usr/local/bin/k3s kubectl get nodes -o wide'
+
+# Verify hostnames, networking, and the worker service.
+vagrant ssh hlehmannS -c 'hostname; ip -brief address'
+vagrant ssh hlehmannSW -c 'hostname; ip -brief address; sudo systemctl is-active k3s-agent'
+
+# Automated checks, including passwordless Vagrant SSH.
 ./scripts/IoT-check.sh
 ```
 
-The subject **advises** 1 CPU / 512–1024 MiB for the lab; the current K3s published *minimum* for a server is 2 CPU / 2 GiB, so the default server size follows the modern K3s minimum rather than the subject's non-binding resource advice. Optional `IOT_P1_TINY=1 vagrant up --provider=virtualbox` uses the smaller resource profile but may be unstable on current K3s.
+The first machine runs the K3s controller; the second joins as an agent. The Vagrantfile generates `p1/.iot-join-token` locally with restricted permissions and synchronizes it to the guests for cluster joining. This token is ignored by Git and must never be committed.
 
-**Expected state:** both Vagrant VMs `running`, with `iots` and `iotsw` in Kubernetes `Ready`; an interface with `.110` on the server and `.111` on the worker; `vagrant ssh` never prompts for the machine's password. The Rocky Linux 10 provisioning scripts also install `kernel-modules-extra` (for `br_netfilter` and overlay) and configure firewalld for the private network and K3s pod/service CIDRs. K3s installs `kubectl` on the server (the separate `kubectl` binary/symlink is provided by K3s). The `.iot-join-token` file is created by the Vagrantfile with owner-only permissions before provisioning, distributed to both VMs via the Vagrant synced folder and ignored by Git.
+An optional small-resource profile is available through `IOT_P1_TINY=1`, although the default server allocation is more suitable for current K3s releases.
 
-**Before P2:** `vagrant destroy -f` (from `p1/`) or `vagrant halt`.
+**Move to P2:** from inside `p1/`, remove the disposable P1 machines to free the shared VirtualBox VM name:
 
-## 2. Part 2 — three nginx web apps and Traefik Ingress
+```bash
+vagrant destroy -f
+cd ..
+```
+
+This does not delete the installed Vagrant base box.
+
+## 4. Part 2 — K3s, three applications and Traefik Ingress
+
+P2 provisions one Debian 13 VM called `hlehmannS` (`192.168.56.110`) with K3s, Traefik and three nginx-based applications.
+
+| HTTP request hostname | Target | Desired replicas |
+| --- | --- | ---: |
+| `app1.com` | `iot-app1` | 1 |
+| `app2.com` | `iot-app2` | 3 |
+| Any other hostname | `iot-app3` | 1 |
+
+The Ingress configuration uses hostname rules for app1/app2 and a catch-all route for app3. Send HTTP `Host` headers explicitly; no public DNS changes are required.
 
 ```bash
 cd p2
+vagrant validate
 vagrant up --provider=virtualbox
-# OR: IOT_VAGRANT_PROVIDER=libvirt vagrant up --provider=libvirt
-vagrant ssh IoTS -c 'sudo kubectl get deployment,pods,service,ingress -o wide'
+vagrant status
+
+vagrant ssh hlehmannS -c 'sudo /usr/local/bin/k3s kubectl get deployments,pods,services,ingress -o wide'
 ./scripts/IoT-check.sh
 
-curl -H 'Host: app1.com' http://192.168.56.110/
-curl -H 'Host: app2.com' http://192.168.56.110/
-curl -H 'Host: other.example' http://192.168.56.110/
+# Run on the Linux Mint workstation:
+curl --noproxy '*' -H 'Host: app1.com' http://192.168.56.110/
+curl --noproxy '*' -H 'Host: app2.com' http://192.168.56.110/
+curl --noproxy '*' -H 'Host: unknown.example' http://192.168.56.110/
 ```
 
-The three responses must contain respectively `Hello from app1.`, `Hello from app2.`, `Hello from app3.`. Host headers are sent explicitly so DNS changes to public `.com` domains are **not** necessary. The `Ingress` resource in `p2/confs/IoT-apps.yaml` includes host rules plus a Kubernetes `defaultBackend`. `app2` has exactly **three replicas**, and the two other deployments have one each. K3s's default Traefik ingress controller and ServiceLB are intentionally left enabled. Show the Ingress object using `sudo kubectl describe ingress iot-routing` during evaluation.
+Expected page messages: `Hello from app1.`, `Hello from app2.`, and `Hello from app3.`, respectively. Check that the deployment replica counts are `1`, `3`, and `1`.
 
-If the guest has an active firewall, allow incoming port 80 on the guest's private interface without exposing it to public networks. Check `sudo ss -lntp | grep :80`, Traefik and ServiceLB pods (`sudo kubectl -n kube-system get pods`), and host-only networking when diagnosing a failed host curl.
-
-**Before P3:** from `p2/`, `vagrant halt` (or `vagrant destroy -f`).
-
-## 3. Part 3 — K3d, Argo CD and public GitHub source
-
-**This part is deliberately not created by a Vagrantfile.** The subject requires K3d running in a Linux VM without Vagrant. Use an Ubuntu 24.04+ or Debian 12+ Linux VM with sufficient disk/RAM, with the repository present. Commands below run as a **regular, sudo-capable Linux user**.
+To inspect routing from within the guest:
 
 ```bash
-# From project root inside the Part 3 Linux VM:
+vagrant ssh hlehmannS -c 'sudo /usr/local/bin/k3s kubectl describe ingress iot-routing'
+```
+
+When finished, stop the P2 VM to free workstation resources:
+
+```bash
+vagrant halt
+cd ..
+```
+
+## 5. Part 3 — K3d, Argo CD and public GitHub GitOps
+
+P3 runs **inside the dedicated Debian 13 VM**, without Vagrant. The scripts create a K3d cluster named `iot`, deploy Argo CD in `argocd`, and manage `wil42/playground` in `dev` from the public GitHub repository.
+
+### Install the tooling and cluster
+
+From the repository root **inside `hlehmann-P3-Bonus`**:
+
+```bash
 ./p3/scripts/IoT-install-tools.sh
-newgrp docker	 # required until a new login activates Docker group
+
+# Activate Docker group membership by logging out/in, or start a new group shell:
+newgrp docker
+
+docker info
 ./p3/scripts/IoT-create-cluster.sh
 ./p3/scripts/IoT-install-argocd.sh
 ```
 
-The first script installs Docker Engine from its official signed APT repository, K3d from the official installer, and kubectl from the official Kubernetes release; install scripts are retained and may be shown during the defense. `docker` group membership is effectively root-equivalent; restrict this setup to your VM lab.
+The tools installer sets up Docker, K3d and kubectl. The cluster creation script selects context `k3d-iot`, creates the `dev` namespace and reuses an existing `iot` cluster rather than creating a duplicate.
 
-### Required user action: create and push your public GitHub repository
-
-Create an empty public repository in your own GitHub account, then from your checked-out project directory:
+### Connect Argo CD to GitHub
 
 ```bash
-# If this is a new directory that is not already under Git:
-git init -b main
-# Only for a NEW repository (do not overwrite your existing 42 remote):
-git remote add origin https://github.com/jaderiverspirit/IoT.git
-git add p1 p2 p3 bonus tests README.md .gitignore
-git commit -m 'Implement IoT p1 p2 p3 and bonus'
-git push -u origin main
-
-# Then tell Argo CD where the *real* public GitHub repository is:
 ./p3/scripts/IoT-configure-github.sh \
-  https://github.com/jaderiverspirit/IoT.git
+  https://github.com/jaderiverspirit/IoT-hlehmann.git
+
+kubectl config current-context
+kubectl get namespaces argocd dev
+kubectl -n argocd get application iot-github
+./p3/scripts/IoT-check.sh
 ```
 
-If the directory already belongs to a Git repository, keep your existing origin/branch and push `p3/confs/apps/` to its `main` branch; the `IoT-configure-github.sh` script assumes `main`. The `git ls-remote` check prevents registering an inaccessible repository. The Argo Application watches `p3/confs/apps` with automatic sync, pruning and self-healing.
+Argo CD watches branch `main`, path `p3/confs/apps`, with automated synchronization, pruning and self-healing.
 
-### P3 evaluation: change `v1` to `v2` in GitHub
+### Demonstrate GitHub continuous deployment
+
+The application has two official image tags: `wil42/playground:v1` and `wil42/playground:v2`. Start with `v1` in `p3/confs/apps/IoT-deployment.yaml` on GitHub.
+
+In one terminal **inside the VM**, expose the application:
 
 ```bash
-./p3/scripts/IoT-check.sh
-# In a separate terminal, keep the local application service port open:
 kubectl -n dev port-forward svc/iot-playground 8888:8888
-# In another terminal:
-curl http://127.0.0.1:8888/		 # expected: {"status":"ok", "message":"v1"}
+```
+
+In another terminal:
+
+```bash
+curl http://127.0.0.1:8888/
+# Expected for v1: {"status":"ok", "message":"v1"}
+```
+
+In a Git checkout with GitHub push access (for example, on the Linux Mint workstation), make and push the version change:
+
+```bash
 ./p3/scripts/IoT-set-version.sh v2
 git add p3/confs/apps/IoT-deployment.yaml
-git commit -m 'IoT deploy v2 via GitHub'
-git push
-# Wait for Argo CD automatic reconciliation (typically within minutes):
-kubectl -n argocd get application iot-github -w
-kubectl -n dev rollout status deploy/iot-playground --timeout=300s
-curl http://127.0.0.1:8888/		 # expected: {"status":"ok", "message":"v2"}
+git commit -m 'Update playground to v2 via GitHub GitOps'
+git push origin main
 ```
 
-Argo CD UI: `kubectl -n argocd port-forward svc/argocd-server 8082:443`, then open `https://127.0.0.1:8082` inside the VM. Username: `admin`. Initial password: `kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d; echo`. The certificate warning is expected for a local self-signed installation. Check for `Synced` and `Healthy`.
-
-## 4. Bonus — local GitLab as the actual Argo CD GitOps source
-
-GitLab is deployed **in the same K3d cluster** using the official `gitlab/gitlab-ce:latest` image and a persistent volume, and placed inside the dedicated `gitlab` namespace. The external URL is intentionally the cluster's real service DNS name:
-
-`http://gitlab.gitlab.svc.cluster.local:8081`
-
-Argo CD inside Kubernetes can resolve the URL natively. The Linux VM reaches that *same URL* through a locally managed `kubectl port-forward` and a scoped `/etc/hosts` entry. A separate worktree in `$HOME/IoT-GitLab-worktree` is created for commits. Secret material is written only under `$HOME/.config/iot/` and kept **out of Git**.
-
-**Prerequisite:** successfully complete and test all of Part 3 first. Allow at least 10–12 GiB of usable RAM for the Part 3/bonus Linux VM and **25 GiB** GitLab persistent storage, plus extra space for Docker layers, logs and system. The official image is large; initial boot, database migrations and Rails startup can take a while. 
+Back inside the VM, watch Argo CD reconcile the pushed GitHub change:
 
 ```bash
-# In the P3 Linux VM, from the project root:
+kubectl -n argocd get application iot-github -w
+# Stop watching with Ctrl+C once synchronized.
+kubectl -n dev rollout status deployment/iot-playground --timeout=300s
+kubectl -n dev get deployment iot-playground \
+  -o jsonpath='{.spec.template.spec.containers[0].image}'; echo
+curl http://127.0.0.1:8888/
+# Expected for v2: {"status":"ok", "message":"v2"}
+```
+
+To open the Argo CD interface from within the Debian VM:
+
+```bash
+kubectl -n argocd port-forward svc/argocd-server 8082:443
+# Browser: https://127.0.0.1:8082 (local self-signed certificate)
+```
+
+The login is `admin`; obtain the generated initial password locally without adding it to the repository:
+
+```bash
+kubectl -n argocd get secret argocd-initial-admin-secret \
+  -o jsonpath='{.data.password}' | base64 -d; echo
+```
+
+## 6. Bonus — local GitLab in the same P3 cluster
+
+The Bonus extends **the existing P3 K3d cluster `iot`**. It deploys GitLab CE into the dedicated `gitlab` namespace and switches the existing Argo CD workflow from a public GitHub source to a **local GitLab repository**.
+
+There is **no second Kubernetes cluster and no second Argo CD installation**. The same application remains in `dev`.
+
+```text
+P3:    GitHub (public) ───► Argo CD (argocd) ───► playground (dev)
+Bonus: GitLab (local) ───► Argo CD (argocd) ───► playground (dev)
+                             same cluster: k3d-iot
+```
+
+The GitLab container uses the official GitLab CE image with a specific version tag defined in `bonus/confs/IoT-gitlab.yaml`. It has persistent storage (PVC request: 25 GiB). Upgrades of an initialized GitLab instance must follow GitLab's supported version-specific upgrade path; changing the image tag alone is not a substitute for a supported migration.
+
+### Install GitLab and configure access
+
+From the project root **inside the same Debian VM as P3**:
+
+```bash
+kubectl config current-context  # Expected: k3d-iot
 ./bonus/scripts/IoT-install-gitlab.sh
 ./bonus/scripts/IoT-start-gitlab-access.sh
-# Browser URL: http://gitlab.gitlab.svc.cluster.local:8081
-# Username: root. First-run password printed by the preceding script.
+```
+
+The GitLab service URL is:
+
+```text
+http://gitlab.gitlab.svc.cluster.local:8081
+```
+
+Inside the cluster, this name resolves via Kubernetes DNS. From the Debian VM, the access script uses a local hosts entry and a loopback `kubectl port-forward` to reach the same URL. GitLab's initial credentials and bootstrap token are stored privately under `~/.config/iot/`, **not** in Git.
+
+### Switch Argo CD to local GitLab
+
+```bash
 ./bonus/scripts/IoT-bootstrap-local-repo.sh
 ./bonus/scripts/IoT-check.sh
 ```
 
-`IoT-bootstrap-local-repo.sh` uses GitLab's documented **Rails PAT API** to create a bootstrap personal access token, creates a **public local GitLab project** with the API, seeds it with the same `p3/confs/apps/` manifests (reset to `v1` in the local GitLab seed, independently of the completed GitHub demonstration), creates a distinct VM worktree, and registers `iot-gitlab` as the Argo CD Application. The public GitLab project allows Argo CD to read without a private token. The local Git push uses an `askpass` helper and token file, not credentials embedded in a Git URL. The previously configured `iot-github` Argo CD Application is deleted before enabling `iot-gitlab`, so two controllers will not fight over the **same** Kubernetes deployment.
+Bootstrap creates a public-to-the-lab GitLab project at `root/iot-gitops`, seeds it with a `v1` copy of the P3 Kubernetes manifests, and creates a separate local working tree at `~/IoT-GitLab-worktree`. It removes the `iot-github` Argo CD Application and registers `iot-gitlab` instead, preventing two Applications from managing the same Kubernetes Deployment concurrently. It does **not** alter the original GitHub remote.
 
-### Bonus evaluation: update from local GitLab (NOT GitHub)
+Verify the source:
+
+```bash
+kubectl -n argocd get application iot-gitlab \
+  -o jsonpath='{.spec.source.repoURL}'; echo
+# Expected:
+# http://gitlab.gitlab.svc.cluster.local:8081/root/iot-gitops.git
+```
+
+### Demonstrate local GitLab continuous deployment
+
+Keep the playground port-forward running in one terminal:
+
+```bash
+kubectl -n dev port-forward svc/iot-playground 8888:8888
+```
+
+In another terminal, push version changes **to local GitLab** using the project script:
 
 ```bash
 ./bonus/scripts/IoT-set-local-version.sh v2
-# The script commits to LOCAL GitLab, pushes, waits for Argo CD's reconciliation,
-# checks the new image in dev, and checks rollout status.
-# While running another terminal with:
-kubectl -n dev port-forward svc/iot-playground 8888:8888
-# Check actual response:
-curl http://127.0.0.1:8888/		  # {"status":"ok", "message":"v2"}
+curl http://127.0.0.1:8888/  # "message":"v2"
+
 ./bonus/scripts/IoT-set-local-version.sh v1
-curl http://127.0.0.1:8888/		  # {"status":"ok", "message":"v1"}
+curl http://127.0.0.1:8888/  # "message":"v1"
+
 ./bonus/scripts/IoT-check.sh
 ```
 
-**Proof the bonus actually works:** `kubectl -n argocd get application iot-gitlab -o yaml` must show a `source.repoURL` under `gitlab.gitlab.svc.cluster.local:8081`; changing the tag in local GitLab must update the live deployment in `dev` and the response on port 8888. Editing the original GitHub repository should *not* be needed for this bonus flow.
+The update must propagate **local GitLab → existing Argo CD → existing Kubernetes Deployment**. No GitHub commit or push is required for the Bonus demonstration.
 
-**Caveats:** GitLab's `latest` tag changes over time. A newly created lab will install the current official image; an existing persistent GitLab install must follow GitLab's supported upgrade sequence. GitLab root password only configures a fresh data volume; changing the generated secret does not automatically rotate an already initialized root account. Local port forwarding must remain alive to use GitLab from the VM. Do not publicly expose this lab or check passwords/PATs into Git. Bonus tests are not substitutes for passing P1/P2/P3.
+## 7. Verification reference
 
-## 5. Evaluation evidence checklist
+| Part | Command | What to confirm |
+| --- | --- | --- |
+| P1 | `cd p1 && ./scripts/IoT-check.sh` | Two guests; server and worker; two Ready nodes; SSH and IPs |
+| P2 | `cd p2 && ./scripts/IoT-check.sh` | Three deployments; replicas 1/3/1; Ingress returns the correct pages |
+| P3 | `./p3/scripts/IoT-check.sh` | `k3d-iot`, Argo CD and `dev` resources; GitHub source and current image |
+| Bonus | `./bonus/scripts/IoT-check.sh` | Local GitLab namespace, PVC and Argo CD GitLab source |
+| Source checks | `python3 tests/IoT-static-checks.py` | Kubernetes YAML structure, Vagrantfile and shell syntax |
 
-| Requirement | Command / evidence | Expected |
-|---|---|---|
-| P1 two VMs | `cd p1 && vagrant status` | `IoTS`, `IoTSW` running |
-| P1 passwordless | `vagrant ssh IoTS`, `vagrant ssh IoTSW` | no VM password prompt |
-| P1 IPs and K3s | `sudo kubectl get nodes -o wide`; `ip a` | `.110`, `.111`, two Ready nodes |
-| P1 roles | `sudo systemctl is-active k3s`, `sudo systemctl is-active k3s-agent` | server / agent respectively |
-| P2 three apps | `sudo kubectl get deploy,pod,svc,ingress` | app1=1, app2=3, app3=1 |
-| P2 Ingress | `curl -H 'Host: app1.com|app2.com|other...' 192.168.56.110` | correct default routing |
-| P3 namespaces | `kubectl get ns` | `argocd`, `dev` |
-| P3 GitOps | Argo Application source URL, GitHub commit, live `curl` | v1 then v2 |
-| Bonus namespace | `kubectl -n gitlab get pods,pvc,svc` | local GitLab running |
-| Bonus source | `kubectl -n argocd get application iot-gitlab -o yaml` | internal GitLab service URL |
-| Bonus GitOps | `IoT-set-local-version.sh v2` and `curl` | update via GitLab and Argo CD |
+For the static checker, install PyYAML if needed (for example, through your distribution's `python3-yaml` package). Static validation does not replace live VM and Kubernetes checks.
 
-## 6. Common troubleshooting
+## 8. Troubleshooting
 
-- **No nested virtualization:** `grep -Ec '(vmx|svm)' /proc/cpuinfo` and `ls /dev/kvm`. Enable nested virtualization in the outer VM's hypervisor; VirtualBox can be more fragile than KVM nested on Linux.
-- **Vagrant port/IP conflicts:** never run `p1` and `p2` at the same time because both define `IoTS` at `.110`. Check existing host-only networks with `ip a`.
-- **Vagrant libvirt:** always select the matching box file with `IOT_VAGRANT_PROVIDER=libvirt` *and* `--provider=libvirt`.
-- **P1 worker cannot join:** check that `/vagrant/.iot-join-token` exists inside both guests, `systemctl status k3s`, and TCP 6443 between `.110` and `.111`.
-- **P2 default route fails:** inspect Traefik logs using `sudo kubectl -n kube-system logs deployment/traefik`, check `kubectl describe ingress iot-routing` and ensure the `Host` header goes to **the VM private IP**.
-- **Docker socket permission:** after installing tools, open a new login or `newgrp docker`; run `docker info` without sudo.
-- **Argo CD does not sync:** `kubectl -n argocd describe application iot-github` (or `iot-gitlab`), inspect `argocd-repo-server` logs, verify source repo/branch/path and outbound connectivity.
-- **GitLab pod pending:** `kubectl -n gitlab describe pod -l app=iot-gitlab`; check RAM, disk and `local-path` storage provisioning. Do not attempt bonus on a 2 GiB VM.
-- **GitLab Rails fails:** `kubectl -n gitlab logs deploy/iot-gitlab --tail=200`; first boot can be slow. Ensure root password secret exists before the deployment starts.
-- **GitLab cannot be reached from VM:** rerun `IoT-start-gitlab-access.sh`; check its log under `~/.config/iot/` and `/etc/hosts` entry. The GitLab URL must stay consistent with Argo CD's source.
+**Vagrant cannot find the Debian box.** Check `vagrant box list`. Import the self-built archive using the exact box name `IoT-Debian13-virtualbox`. A fresh Git clone alone does not contain the box archive.
 
-## 7. References
+**P2 VM name already exists.** P1 and P2 both use the VirtualBox name `hlehmannS`. Run `vagrant destroy -f` in `p1/` after finishing P1; merely running `vagrant halt` does not remove the registered name.
 
-- Rocky Linux vendor-hosted Vagrant images: https://dl.rockylinux.org/pub/rocky/10/images/x86_64/
-- Vagrant box URLs and box settings: https://developer.hashicorp.com/vagrant/docs/vagrantfile/machine_settings
-- K3s installation: https://docs.k3s.io/quick-start
-- K3s hardware requirements: https://docs.k3s.io/installation/requirements
-- Traefik Kubernetes Ingress default backend: https://doc.traefik.io/traefik/reference/routing-configuration/kubernetes/ingress/
-- K3d: https://k3d.io/stable/
-- Argo CD installation: https://argo-cd.readthedocs.io/en/stable/getting_started/
-- GitLab official Docker images and configuration: https://docs.gitlab.com/install/docker/installation/
-- GitLab documented PAT bootstrap from Rails: https://docs.gitlab.com/user/profile/personal_access_tokens/
+**P1 worker does not join.** Check the server at `192.168.56.110`, worker at `192.168.56.111`, the locally generated `/vagrant/.iot-join-token`, K3s services and TCP port 6443 between guests.
 
-## 8. Before submitting
+**Kubernetes node names differ from guest hostnames.** This is intentional: Vagrant guest names include the subject-required capitals (`hlehmannS`, `hlehmannSW`); Kubernetes node names are lowercase (`hlehmanns`, `hlehmannsw`).
 
-1. Run all runtime validations on the target Linux VM: this archive is source code, not a deployed cluster.
-2. Record successful `vagrant`, `kubectl`, Argo and GitLab output for the defense. Do not commit the generated join token or user credentials.
-3. Re-run `python3 tests/IoT-static-checks.py` after changes.
-4. The subject explicitly states that a failed mandatory requirement prevents the **bonus** being assessed.
+**P2 HTTP requests fail.** Check `kubectl get ingress,svc,pods`, Traefik and ServiceLB in `kube-system`, the guest's port 80 and the VirtualBox private network. Use `curl --noproxy '*'` to bypass host proxy settings.
 
-## 9. Quick acceptance checklist — group preflight & peer evaluation
+**Docker reports permission denied.** Re-enter the Docker group with `newgrp docker` or log out and in again. Membership in the Docker group gives root-equivalent access to the VM.
 
-### General rules and submission
+**Argo CD stays OutOfSync or cannot fetch Git.** Check `kubectl -n argocd describe application iot-github` (or `iot-gitlab`), repository URL, `main` branch, `p3/confs/apps` path and repo-server logs. Use `kubectl config current-context` to confirm `k3d-iot`.
 
-| Check | Requirement | Evidence / acceptance criterion |
-|---|---|---|
-| ☐ | Project executed **inside a Linux VM** | Show the evaluation VM and its virtualization setup; do not rely on a physical-host-only demonstration. |
-| ☐ | Correct root folders and placement | `ls -d p1 p2 p3 bonus`; each part has its `scripts/` and `confs/` directory, and configuration/scripts are committed. |
-| ☐ | Team login and repository naming are compliant | VMs use `<login>S` / `<login>SW`; the **public GitHub** repository name contains a team member's actual login. |
-| ☐ | Reproducible provisioning and no committed secrets | Show `p1/Vagrantfile`, `p2/Vagrantfile`, `p3/scripts/IoT-install-tools.sh` and bonus scripts; check `git status --short` and `git ls-files` (no join token, passwords or PATs). |
+**GitLab pod is Pending or not Ready.** Check VM memory/disk, PVC state, pod events and logs:
 
-### P1 — Vagrant + K3s server/worker
+```bash
+kubectl -n gitlab get pods,pvc,svc
+kubectl -n gitlab describe deployment iot-gitlab
+kubectl -n gitlab logs deployment/iot-gitlab --tail=150
+```
 
-| Check | Requirement | Evidence / acceptance criterion |
-|---|---|---|
-| ☐ | Two **Vagrant** VMs with correct names | `cd p1 && vagrant status` → `IoTS` and `IoTSW` are running (and match actual team login). |
-| ☐ | Current distribution from **vendor-hosted** Vagrant image | Inspect `p1/Vagrantfile`: `config.vm.box_url` points to the distribution publisher, not just the HashiCorp registry. |
-| ☐ | Correct guest hostnames and **dedicated interface/IPs** | `cd p1 && vagrant ssh IoTS -c 'hostname; ip -br a'` → `IoTS`, `192.168.56.110`; repeat with `IoTSW` → `192.168.56.111`. |
-| ☐ | **Passwordless SSH** into both VMs | `cd p1 && vagrant ssh IoTS -c hostname && vagrant ssh IoTSW -c hostname` → no guest password requested. |
-| ☐ | K3s roles + usable `kubectl` | `cd p1 && vagrant ssh IoTS -c 'sudo kubectl get nodes -o wide'` → **2 Ready nodes**; `k3s` active on server, `k3s-agent` active on worker. |
-| ☐ | Complete P1 demonstration | `cd p1 && ./scripts/IoT-check.sh` → all checks succeed. **Stop P1 before starting P2.** |
+**Local GitLab cannot be reached from the VM.** Rerun `./bonus/scripts/IoT-start-gitlab-access.sh`; inspect `~/.config/iot/gitlab-portforward.log` and the local `/etc/hosts` mapping. The port-forward must remain active.
 
-### P2 — K3s + three web apps + Ingress
+**A version change does not affect the application.** Confirm whether `iot-github` (P3) or `iot-gitlab` (Bonus) is the active Argo CD Application, then inspect its Git source, synchronization state, Deployment image and Pod rollout.
 
-| Check | Requirement | Evidence / acceptance criterion |
-|---|---|---|
-| ☐ | Exactly one Vagrant VM, server role, correct IP | `cd p2 && vagrant status` → only `IoTS` running; `vagrant ssh IoTS -c 'ip -br a; sudo kubectl get nodes'` → `192.168.56.110`, Ready. |
-| ☐ | **Three running web applications** and Services | `cd p2 && vagrant ssh IoTS -c 'sudo kubectl get deploy,pods,svc'` → app1, app2, app3 resources all healthy. |
-| ☐ | **App2 = 3 replicas** (app1/app3 = 1 each) | `cd p2 && vagrant ssh IoTS -c 'sudo kubectl get deployments'` → ready replica counts `1/1`, `3/3`, `1/1`. |
-| ☐ | Ingress rules exist and can be explained | `cd p2 && vagrant ssh IoTS -c 'sudo kubectl describe ingress iot-routing'` → `app1.com`, `app2.com`, and default backend `iot-app3`. |
-| ☐ | `Host: app1.com` returns **app1** | `curl -H 'Host: app1.com' http://192.168.56.110/` → `Hello from app1.` |
-| ☐ | `Host: app2.com` returns **app2** | `curl -H 'Host: app2.com' http://192.168.56.110/` → `Hello from app2.` |
-| ☐ | Any other Host returns **app3** | `curl -H 'Host: unknown.example' http://192.168.56.110/` → `Hello from app3.` |
-| ☐ | Complete P2 demonstration | `cd p2 && ./scripts/IoT-check.sh` → all checks succeed. **Stop P2 before P3.** |
+## 9. Security and useful references
 
-### P3 — Docker + K3d + Argo CD + public GitHub GitOps
+Do not commit K3s join tokens, GitLab root passwords, GitLab personal access tokens, `.env` files or generated Kubernetes credentials. The `boxes/*.box` images and runtime state are deliberately excluded from Git. GitLab is configured for a private teaching lab, not exposed as a production service.
 
-| Check | Requirement | Evidence / acceptance criterion |
-|---|---|---|
-| ☐ | **No Vagrant** for P3; required tools installable by script | Show `p3/scripts/IoT-install-tools.sh`; `docker info`, `k3d cluster list`, `kubectl version --client` work in the Linux VM. |
-| ☐ | K3d cluster and **two required namespaces** | `kubectl config current-context` → `k3d-iot`; `kubectl get ns argocd dev` → both Active. |
-| ☐ | Argo CD installed and functional | `kubectl -n argocd get pods,application` → Argo components healthy; `iot-github` present. Show UI `Synced` / `Healthy`. |
-| ☐ | **Public, online GitHub** repository used by Argo CD | `kubectl -n argocd get application iot-github -o yaml` → real GitHub URL, correct branch/path; repository opens publicly and contains `p3/confs/apps/`. |
-| ☐ | Deployed application in `dev` with **v1** | `kubectl -n dev get pods,deploy,svc`; `kubectl -n dev get deploy iot-playground -o jsonpath='{.spec.template.spec.containers[0].image}'` → `wil42/playground:v1` initially. |
-| ☐ | **Actual GitOps update v1 → v2**, not a manual `kubectl apply` | Commit/push the image tag change to **GitHub**, let Argo CD automatically sync, then confirm live Deployment image `wil42/playground:v2` and app `Synced` / `Healthy`. |
-| ☐ | HTTP output confirms both versions | With `kubectl -n dev port-forward svc/iot-playground 8888:8888` running, `curl http://127.0.0.1:8888/` returns `{"status":"ok", "message":"v1"}` before, and `{"status":"ok", "message":"v2"}` after GitHub sync. |
-| ☐ | Complete P3 demonstration | `./p3/scripts/IoT-check.sh` succeeds after syncing; show the GitHub commit and Argo CD deployment history. |
-
-### Bonus — **local** GitLab integrated into the same GitOps workflow (subject p. 16)
-
-| Check | Requirement | Evidence / acceptance criterion |
-|---|---|---|
-| ☐ | **All P1, P2 and P3 checks passed first** | Otherwise stop: bonus is not eligible for evaluation. |
-| ☐ | Current **official GitLab** deployed **locally** | Show `bonus/confs/IoT-gitlab.yaml` official `gitlab/gitlab-ce:latest` image and running instance; verify the deployed GitLab version against the current official release at evaluation time. |
-| ☐ | Dedicated `gitlab` namespace and healthy service/storage | `kubectl get ns gitlab && kubectl -n gitlab get pods,svc,pvc` → GitLab Ready, service available, PVC Bound. |
-| ☐ | Local GitLab web UI and local Git repository usable | Open local GitLab; show `root/iot-gitops` and its `main` branch with `p3/confs/apps/`. |
-| ☐ | **Argo CD reads from local GitLab, not GitHub** | `kubectl -n argocd get application iot-gitlab -o jsonpath='{.spec.source.repoURL}'` → `http://gitlab.gitlab.svc.cluster.local:8081/root/iot-gitops.git`; app `Synced` / `Healthy`. |
-| ☐ | **Actual local GitLab GitOps update v1 → v2** | Run `./bonus/scripts/IoT-set-local-version.sh v2`; show **GitLab** commit, Argo auto-sync, live image `wil42/playground:v2`, and port-8888 response containing `"message":"v2"`. Do **not** push to GitHub for this test. |
-| ☐ | Rollback v2 → v1 also works | Run `./bonus/scripts/IoT-set-local-version.sh v1`; Argo syncs and `curl` confirms `"message":"v1"`. |
-| ☐ | Complete bonus demonstration | `./bonus/scripts/IoT-check.sh` succeeds; explain how the GitLab application replaces the GitHub source without changing the `dev` application's functionality. |
+- [Project repository](https://github.com/jaderiverspirit/IoT-hlehmann)
+- [Debian](https://www.debian.org/distrib/)
+- [Vagrant machine configuration](https://developer.hashicorp.com/vagrant/docs/vagrantfile/machine_settings)
+- [K3s documentation](https://docs.k3s.io/)
+- [K3d documentation](https://k3d.io/stable/)
+- [Argo CD documentation](https://argo-cd.readthedocs.io/en/stable/)
+- [GitLab Docker installation](https://docs.gitlab.com/install/docker/installation/)
+- [GitLab upgrade paths](https://docs.gitlab.com/update/upgrade_paths/)

@@ -15,12 +15,12 @@ Vagrant.configure('2') do |config|
   config.vm.box_check_update = false
   config.vm.synced_folder '.', '/vagrant', type: 'rsync'
 
-  config.vm.define 'IoTS' do |server|
-    server.vm.hostname = 'IoTS'
+  config.vm.define 'hlehmannS' do |server|
+    server.vm.hostname = 'hlehmannS'
     server.vm.network 'private_network', ip: '192.168.56.110'
 
     server.vm.provider 'virtualbox' do |vb|
-      vb.name = 'IoTS-P2'
+      vb.name = 'hlehmannS'
       vb.cpus = 2
       vb.memory = 2048
     end

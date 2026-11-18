@@ -38,7 +38,7 @@ fi
 # Install a single-node K3s server.
 # Traefik and ServiceLB remain enabled.
 export INSTALL_K3S_CHANNEL=stable
-export INSTALL_K3S_EXEC='server --node-name=iots --node-ip=192.168.56.110 --advertise-address=192.168.56.110 --tls-san=192.168.56.110 --write-kubeconfig-mode=644'
+export INSTALL_K3S_EXEC='server --node-name=hlehmanns --node-ip=192.168.56.110 --advertise-address=192.168.56.110 --tls-san=192.168.56.110 --write-kubeconfig-mode=644'
 
 curl --fail --silent --show-error --location \
   https://get.k3s.io -o /tmp/iot-install-k3s.sh
@@ -48,7 +48,7 @@ sh /tmp/iot-install-k3s.sh
 # Wait until the Kubernetes node is Ready.
 for attempt in $(seq 1 120); do
   if /usr/local/bin/k3s kubectl --request-timeout=10s \
-       wait --for=condition=Ready node/iots --timeout=5s \
+       wait --for=condition=Ready node/hlehmanns --timeout=5s \
        >/dev/null 2>&1; then
     break
   fi

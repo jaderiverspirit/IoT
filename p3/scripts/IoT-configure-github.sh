@@ -18,7 +18,14 @@ GIT_TERMINAL_PROMPT=0 git ls-remote "$repo" HEAD >/dev/null || {
   echo 'Repository not reachable: ensure it is public and contains a main branch.' >&2; exit 1;
 }
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+
+# Ensure only one Argo CD Application manages the playground.
+# With no Argo CD deletion finalizer, the deployed resources are retained.
+kubectl -n argocd delete application iot-gitlab \
+  --ignore-not-found --wait=true
+
 sed "s|__IOT_GITHUB_URL__|${repo}|" \
   "$root/p3/confs/IoT-github-application.template.yaml" | kubectl apply -f -
+
 kubectl -n argocd get applications iot-github
 printf 'Argo CD will now automatically sync manifests from: %s\n' "$repo"
