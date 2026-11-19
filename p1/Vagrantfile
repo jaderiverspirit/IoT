@@ -2,9 +2,6 @@
 require 'securerandom'
 
 # Debian 13 (Trixie) — locally built VirtualBox base box.
-BOX_FILE = File.expand_path(
-  '../boxes/IoT-Debian13-virtualbox.box', __dir__
-)
 
 provider = ENV.fetch('IOT_VAGRANT_PROVIDER', 'virtualbox')
 raise "Unsupported provider: #{provider}" unless provider == 'virtualbox'
@@ -19,8 +16,7 @@ File.chmod(0o600, token_file)
 
 Vagrant.configure('2') do |config|
   config.vm.box = 'IoT-Debian13-virtualbox'
-  config.vm.box_url = "file://#{BOX_FILE}" if File.file?(BOX_FILE)
-  config.vm.box_check_update = false # vendor URL 'latest' is mutable, not a catalog
+  config.vm.box_check_update = false # Use the installed local box
   config.vm.synced_folder '.', '/vagrant', type: 'rsync'
 
   # Provider-specific limits (required by the exercise for Part 1).

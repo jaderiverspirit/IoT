@@ -12,7 +12,7 @@ except ImportError:
     print('PyYAML missing: python3 -m pip install PyYAML', file=sys.stderr)
     sys.exit(2)
 
-R = Path(__file__).resolve().parent.parent
+R = Path(__file__).resolve().parents[2]
 all_yaml = sorted(R.glob('*/confs/**/*.yaml'))
 count = 0
 for path in all_yaml:
@@ -67,7 +67,7 @@ assert {x['kind'] for x in gitlab} == {'Deployment', 'PersistentVolumeClaim', 'S
 assert all(x['metadata']['namespace'] == 'gitlab' for x in gitlab)
 assert next(x for x in gitlab if x['kind'] == 'Deployment')['spec']['template']['spec']['containers'][0]['image'] == 'gitlab/gitlab-ce:19.5.6-ce.0'
 
-assert set(x.name for x in R.iterdir() if x.is_dir() and not x.name.startswith(".")) == {'p1','p2','p3','bonus','tests','boxes'}
+assert set(x.name for x in R.iterdir() if x.is_dir() and not x.name.startswith(".")) == {'p1','p2','p3','bonus'}
 for part in ('p1','p2','p3','bonus'):
     assert (R/part/'scripts').is_dir()
     assert (R/part/'confs').is_dir()

@@ -49,8 +49,6 @@ P1 and P2 are separate Vagrant environments but deliberately reuse the VirtualBo
 ├── bonus/
 │   ├── scripts/
 │   └── confs/
-├── boxes/                  # optional local Debian Vagrant box; *.box is ignored
-├── tests/
 └── README.md
 ```
 
@@ -70,7 +68,7 @@ vagrant box list
 # Expected entry: IoT-Debian13-virtualbox (virtualbox, ...)
 ```
 
-Both `p1/Vagrantfile` and `p2/Vagrantfile` use this box name. They optionally refer to `boxes/IoT-Debian13-virtualbox.box` if that archive is present. The `.box` archive is excluded from Git because it is several gigabytes in size; **a fresh clone on another machine requires the self-built box to be imported or rebuilt first**.
+Both Vagrantfiles use the locally installed `IoT-Debian13-virtualbox` box. The box archive is not included in the repository. On another computer, import or rebuild the box before starting Vagrant.
 
 To import an existing archive, if necessary:
 
@@ -350,7 +348,7 @@ The update must propagate **local GitLab → existing Argo CD → existing Kuber
 | P2 | `cd p2 && ./scripts/IoT-check.sh` | Three deployments; replicas 1/3/1; Ingress returns the correct pages |
 | P3 | `./p3/scripts/IoT-check.sh` | `k3d-iot`, Argo CD and `dev` resources; GitHub source and current image |
 | Bonus | `./bonus/scripts/IoT-check.sh` | Local GitLab namespace, PVC and Argo CD GitLab source |
-| Source checks | `python3 tests/IoT-static-checks.py` | Kubernetes YAML structure, Vagrantfile and shell syntax |
+| Source checks | `python3 bonus/scripts/IoT-static-checks.py` | Kubernetes YAML structure, Vagrantfile and shell syntax |
 
 For the static checker, install PyYAML if needed (for example, through your distribution's `python3-yaml` package). Static validation does not replace live VM and Kubernetes checks.
 
@@ -384,7 +382,7 @@ kubectl -n gitlab logs deployment/iot-gitlab --tail=150
 
 ## 9. Security and useful references
 
-Do not commit K3s join tokens, GitLab root passwords, GitLab personal access tokens, `.env` files or generated Kubernetes credentials. The `boxes/*.box` images and runtime state are deliberately excluded from Git. GitLab is configured for a private teaching lab, not exposed as a production service.
+Do not commit K3s join tokens, GitLab root passwords, GitLab personal access tokens, `.env` files or generated Kubernetes credentials. Local Vagrant box archives are stored outside the repository; runtime state is excluded from Git. GitLab is configured for a private teaching lab, not exposed as a production service.
 
 - [Project repository](https://github.com/jaderiverspirit/IoT-hlehmann)
 - [Debian](https://www.debian.org/distrib/)

@@ -1,9 +1,6 @@
 # frozen_string_literal: true
 
 # Debian 13 (Trixie) — locally built VirtualBox base box.
-BOX_FILE = File.expand_path(
-  '../boxes/IoT-Debian13-virtualbox.box', __dir__
-)
 
 provider = ENV.fetch('IOT_VAGRANT_PROVIDER', 'virtualbox')
 raise "Unsupported provider: #{provider}" unless provider == 'virtualbox'
@@ -11,7 +8,6 @@ raise "Unsupported provider: #{provider}" unless provider == 'virtualbox'
 Vagrant.configure('2') do |config|
   config.vm.boot_timeout = 900
   config.vm.box = 'IoT-Debian13-virtualbox'
-  config.vm.box_url = "file://#{BOX_FILE}"
   config.vm.box_check_update = false
   config.vm.synced_folder '.', '/vagrant', type: 'rsync'
 
